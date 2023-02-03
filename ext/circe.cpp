@@ -1,0 +1,325 @@
+#include <ruby.h>
+
+#define IF_UNDEF(a, b)                          \
+    ((a) == Qundef) ? (b) : (a)
+
+
+static VALUE cCirce       = Qundef;
+static VALUE eCirceError  = Qundef;
+
+#include <tuple>
+#include <string>
+#include <chrono>
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgproc.hpp>
+
+#include "yolo.h"
+#include "yunet.h"
+
+using namespace std;
+using namespace cv;
+
+
+
+// Text parameters.
+const float FONT_SCALE = 0.7;
+const int   FONT_FACE  = FONT_HERSHEY_SIMPLEX;
+const int   THICKNESS  = 1;
+
+// Colors.
+cv::Scalar BLACK  = cv::Scalar(0,0,0);
+cv::Scalar BLUE   = cv::Scalar(255, 178, 50);
+cv::Scalar YELLOW = cv::Scalar(0, 255, 255);
+cv::Scalar RED    = cv::Scalar(0,0,255);
+
+
+static ID id_debug;
+static ID id_face;
+static ID id_classify;
+static ID id_class;
+static ID id_png;
+static ID id_jpg;
+
+
+static Yolo  *yolo;
+static YuNet *yunet;
+
+
+
+static void
+draw_label(cv::Mat& img, string label, Point& origin,
+	   Scalar& fgcolor, Scalar& bgcolor, int thickness = 1)
+{
+    int baseLine;
+    cv::Size label_size =
+	cv::getTextSize(label, FONT_FACE, FONT_SCALE, thickness, &baseLine);
+    
+    Point a = { origin.x, max(origin.y, label_size.height) };
+    Point b = { a.x + label_size.width,
+		a.y + label_size.height + baseLine };
+    Point t = { a.x, a.y + label_size.height };
+    
+    cv::rectangle(img, a, b, bgcolor, cv::FILLED);
+    cv::putText(img, label, t, FONT_FACE, FONT_SCALE, fgcolor, THICKNESS);
+}
+
+static void
+draw_labelbox(cv::Mat& img, string label, Rect& box,
+	      Scalar& framecolor = BLUE, Scalar& textcolor = BLACK,
+	      int thickness = 1) {
+
+    Point a = { box.x,             box.y              };
+    Point b = { box.x + box.width, box.y + box.height };
+
+    cv::rectangle(img, a, b, framecolor, thickness);
+    draw_label(img, label, a, textcolor, framecolor);    
+}
+
+
+
+
+
+void
+yunet_process_features(vector<YuNet::Face>& faces,
+		       Mat& img, VALUE v_features, int *state)
+{
+    for (int i = 0; i < faces.size(); i++) {
+	Rect box              = faces[i].first;
+	YuNet::Landmark lmark = faces[i].second;
+	
+	VALUE v_type       = ID2SYM(id_face);
+	VALUE v_box        = rb_ary_new_from_args(4,
+				 INT2NUM(box.x    ), INT2NUM(box.y     ),
+				 INT2NUM(box.width), INT2NUM(box.height));
+	VALUE v_landmark   = rb_ary_new_from_args(5,
+			        rb_ary_new_from_args(2, INT2NUM(lmark[0].x),
+						        INT2NUM(lmark[0].y)),
+				rb_ary_new_from_args(2, INT2NUM(lmark[1].x),
+						        INT2NUM(lmark[1].y)),
+				rb_ary_new_from_args(2, INT2NUM(lmark[2].x),
+						        INT2NUM(lmark[2].y)),
+				rb_ary_new_from_args(2, INT2NUM(lmark[3].x),
+						        INT2NUM(lmark[3].y)),
+				rb_ary_new_from_args(2, INT2NUM(lmark[4].x),
+						        INT2NUM(lmark[4].y)));
+	VALUE v_feature    = rb_ary_new_from_args(3, v_type, v_box,
+						     v_landmark);
+	rb_ary_push(v_features, v_feature);
+	
+	if (!img.empty() && rb_block_given_p()) {
+	    VALUE v_annotation= rb_yield_splat(v_feature);
+	    VALUE v_label     = Qnil;
+	    VALUE v_color     = ULONG2NUM(0x0000ff);
+	    VALUE v_thickness = INT2NUM(1);
+
+	    switch (TYPE(v_annotation)) {
+	    case T_NIL:
+		break;
+	    case T_HASH:
+		break;
+	    case T_ARRAY:
+		switch(RARRAY_LENINT(v_annotation)) {
+		default:
+		case 3: v_thickness = RARRAY_AREF(v_annotation, 2);
+		case 2: v_color     = RARRAY_AREF(v_annotation, 1);
+		case 1: v_label     = RARRAY_AREF(v_annotation, 0);
+		case 0: break;
+		}
+		break;
+	    case T_STRING:
+		v_label = v_annotation;
+		break;
+	    }
+	    
+	    if (! NIL_P(v_label)) {
+		string label     = StringValueCStr(v_label);
+		long   rgb       = NUM2ULONG(v_color);
+		int    thickness = NUM2INT(v_thickness);
+		Scalar color     = cv::Scalar((rgb >>  0) & 0xFF,
+					      (rgb >>  8) & 0xFF,
+					      (rgb >> 16) & 0xFF);
+		draw_labelbox(img, label, box, color, BLACK, thickness);
+		
+		for (const auto& p : lmark) {
+		    cv::circle(img, p, 3, cv::Scalar(255, 0, 0), 2);
+		}
+	    }
+	}
+    }
+}
+
+
+
+void
+yolo_process_features(vector<Yolo::Item>& items,
+		      Mat& img, VALUE v_features, int *state)
+{   
+    for (int i = 0; i < items.size(); i++) {
+	string name        = std::get<0>(items[i]);
+	float  confidence  = std::get<1>(items[i]);
+	Rect   box         = std::get<2>(items[i]);
+	
+	VALUE v_type       = ID2SYM(id_class);
+	VALUE v_name       = rb_str_new(name.c_str(), name.size());
+	VALUE v_confidence = DBL2NUM(confidence);
+	VALUE v_box        = rb_ary_new_from_args(4,
+				  INT2NUM(box.x    ), INT2NUM(box.y     ),
+				  INT2NUM(box.width), INT2NUM(box.height));
+	VALUE v_feature    = rb_ary_new_from_args(4, v_type, v_box,
+						     v_name, v_confidence);
+	rb_ary_push(v_features, v_feature);
+
+	if (rb_block_given_p()) {
+	    VALUE v_annotation = rb_yield_splat(v_feature);
+	    
+	    VALUE v_label      = Qnil;
+	    VALUE v_color      = ULONG2NUM(0x0000ff);
+	    VALUE v_thickness  = INT2NUM(1);
+	    
+	    switch (TYPE(v_annotation)) {
+	    case T_NIL:
+		break;
+	    case T_HASH:
+		break;
+	    case T_ARRAY:
+		switch(RARRAY_LENINT(v_annotation)) {
+		default:
+		case 3: v_thickness = RARRAY_AREF(v_annotation, 2);
+		case 2: v_color     = RARRAY_AREF(v_annotation, 1);
+		case 1: v_label     = RARRAY_AREF(v_annotation, 0);
+		case 0: break;
+		}
+		break;
+	    case T_STRING:
+		v_label = v_annotation;
+		break;
+	    }
+	    
+	    if (! NIL_P(v_label)) {
+		string label     = StringValueCStr(v_label);
+		long   rgb       = NUM2ULONG(v_color);
+		int    thickness = NUM2INT(v_thickness);
+		Scalar color     = cv::Scalar((rgb >>  0) & 0xFF,
+					      (rgb >>  8) & 0xFF,
+					      (rgb >> 16) & 0xFF);
+		draw_labelbox(img, label, box, color, BLACK, thickness);
+	    }
+	}
+    }
+}
+
+
+
+static VALUE
+circe_m_analyze(int argc, VALUE* argv, VALUE self) {
+    // Retrieve arguments
+    VALUE v_imgstr, v_format, v_opts;
+    VALUE kwargs[3];
+    rb_scan_args(argc, argv, "11:", &v_imgstr, &v_format, &v_opts);
+    rb_get_kwargs(v_opts, (ID[]){ id_debug, id_face, id_classify },
+		  0, 3, kwargs);
+    VALUE v_debug    = IF_UNDEF(kwargs[0], Qfalse);
+    VALUE v_face     = IF_UNDEF(kwargs[1], Qfalse);
+    VALUE v_classify = IF_UNDEF(kwargs[2], Qfalse);
+
+    VALUE v_features = rb_ary_new();
+    VALUE v_image    = Qnil;
+    
+    if (! NIL_P(v_format)) {
+	Check_Type(v_format, T_SYMBOL);
+	ID i_format = rb_sym2id(v_format);
+	if ((i_format != id_png) && (i_format != id_jpg))
+	    rb_raise(rb_eArgError, "format must be :png, :jpg or nil");
+    }
+    
+    if (!RTEST(v_face) && !RTEST(v_classify)) {
+	v_face = v_classify = Qtrue;
+    }
+
+
+    // Load image.
+    Mat i_img = cv::imdecode(cv::Mat(1, RSTRING_LEN(v_imgstr), CV_8UC1,
+				     (unsigned char *)RSTRING_PTR(v_imgstr)),
+			     IMREAD_UNCHANGED);	    
+    Mat o_img = NIL_P(v_format) ? cv::Mat() : i_img.clone();
+
+    // Processing
+    std::chrono::time_point<std::chrono::system_clock> start_time, end_time;
+    std::chrono::duration<double> duration;
+    int state = 0;
+
+    start_time = std::chrono::system_clock::now();
+    
+    if (RTEST(v_classify)) {
+	vector<Yolo::Item> items;
+	yolo->process(i_img, items);
+	yolo_process_features(items, o_img, v_features, &state);
+	if (state) goto exception;
+    }
+
+    if (RTEST(v_face)) {
+	vector<YuNet::Face> faces;
+	yunet->process(i_img, faces);
+	yunet_process_features(faces, o_img, v_features, &state);
+	if (state) goto exception;
+    }
+
+    end_time = std::chrono::system_clock::now();
+    duration = end_time - start_time;
+    
+
+    if (! NIL_P(v_format)) {
+	if (RTEST(v_debug)) {
+	    double ms    = duration / 1.0ms;
+	    string label = cv::format("Inference time : %0.2f ms", ms);
+	    cv::putText(o_img, label, Point(20, 40),
+			FONT_FACE, FONT_SCALE, RED);
+	}
+
+	ID   i_format = rb_sym2id(v_format);
+	string format;
+	if      (i_format == id_png) { format = ".png"; }
+	else if (i_format == id_jpg) { format = ".jpg"; }
+
+	std::vector<uchar> buf;	
+	cv::imencode(format, o_img, buf);
+	v_image = rb_str_new(reinterpret_cast<char*>(buf.data()), buf.size());
+    }
+    return rb_ary_new_from_args(2, v_features, v_image);
+
+ exception:
+    i_img.release();
+    o_img.release();
+    rb_jump_tag(state);
+}
+
+
+
+
+extern "C"
+void Init_core(void) {
+    /* Main classes */
+    cCirce      = rb_define_class("Circe", rb_cObject);
+    eCirceError = rb_define_class_under(cCirce, "Error", rb_eStandardError);
+    // myclass = rb_const_get(mymodule, sym_myclass);
+
+    VALUE v_onnx_yolo  = rb_const_get(cCirce, rb_intern("ONNX_YOLO"));
+    VALUE v_onnx_yunet = rb_const_get(cCirce, rb_intern("ONNX_YUNET"));
+
+    static Yolo  _yolo  = { StringValueCStr(v_onnx_yolo ) };
+    static YuNet _yunet = { StringValueCStr(v_onnx_yunet) };
+
+    yolo  = &_yolo;
+    yunet = &_yunet;
+
+    
+    id_debug       = rb_intern_const("debug"   );
+    id_face        = rb_intern_const("face"    );
+    id_classify    = rb_intern_const("classify");
+    id_class       = rb_intern_const("class"   );
+    id_png         = rb_intern_const("png"     );
+    id_jpg         = rb_intern_const("jpg"     );
+    
+    
+    rb_define_method(cCirce, "analyze", circe_m_analyze, -1);
+}
