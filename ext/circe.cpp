@@ -1,5 +1,84 @@
 #include <ruby.h>
 
+#if 0
+void estimateHeadPose(cv::Mat& image, CameraModel& camera, const FaceDetection::Landmark& landmark)
+{
+    /* reference: https://qiita.com/TaroYamada/items/e3f3d0ea4ecc0a832fac */
+    /* reference: https://github.com/spmallick/learnopencv/blob/master/HeadPose/headPose.cpp */
+    static const std::vector<cv::Point3f> face_object_point_list = {
+        {    0.0f,    0.0f,    0.0f }, // Nose
+        { -225.0f,  170.0f, -135.0f }, // Left eye
+        {  225.0f,  170.0f, -135.0f }, // Right eye
+        { -150.0f, -150.0f, -125.0f }, // Left lip
+        {  150.0f, -150.0f, -125.0f }, // Right lip
+    };
+    
+    static const std::vector<cv::Point3f> face_object_point_for_pnp_list = {
+        face_object_point_list[0], face_object_point_list[0], // Nose
+        face_object_point_list[1], face_object_point_list[1], // Left eye
+        face_object_point_list[2], face_object_point_list[2], // Right eye
+        face_object_point_list[3], face_object_point_list[3], // Left lip
+        face_object_point_list[4], face_object_point_list[4], // Righ lip
+    };
+
+    std::vector<cv::Point2f> face_image_point_list;
+    face_image_point_list.push_back(landmark[2]);  // Nose
+    face_image_point_list.push_back(landmark[2]);  // Nose
+    face_image_point_list.push_back(landmark[0]);  // Left eye
+    face_image_point_list.push_back(landmark[0]);  // Left eye
+    face_image_point_list.push_back(landmark[1]);  // Right eye
+    face_image_point_list.push_back(landmark[1]);  // Right eye
+    face_image_point_list.push_back(landmark[3]);  // Left lip
+    face_image_point_list.push_back(landmark[3]);  // Left lip
+    face_image_point_list.push_back(landmark[4]);  // Right lip
+    face_image_point_list.push_back(landmark[4]);  // Right lip
+
+    cv::Mat rvec = cv::Mat_<float>(3, 1);
+    cv::Mat tvec = cv::Mat_<float>(3, 1);
+    cv::solvePnP(face_object_point_for_pnp_list, face_image_point_list, camera.K, camera.dist_coeff, rvec, tvec, false, cv::SOLVEPNP_ITERATIVE);
+
+    char text[128];
+    snprintf(text, sizeof(text), "Pitch = %-+4.0f, Yaw = %-+4.0f, Roll = %-+4.0f", Rad2Deg(rvec.at<float>(0, 0)), Rad2Deg(rvec.at<float>(1, 0)), Rad2Deg(rvec.at<float>(2, 0)));
+    CommonHelper::drawText(image, text, cv::Point(10, 10), 0.7, 3, cv::Scalar(0, 0, 0), cv::Scalar(255, 255, 255), false);
+    
+    std::vector<cv::Point3f> nose_end_point3D = { { 0.0f, 0.0f, 500.0f } };
+    std::vector<cv::Point2f> nose_end_point2D;
+    cv::projectPoints(nose_end_point3D, rvec, tvec,
+		      camera.K, camera.dist_coeff, nose_end_point2D);
+    cv::arrowedLine(image, face_image_point_list[0], nose_end_point2D[0],
+		    cv::Scalar(0, 255, 0), 5);
+
+    
+    /* Calculate Euler Angle */
+    cv::Mat R;
+    cv::Rodrigues(rvec, R);
+    cv::Mat projMat = (cv::Mat_<double>(3, 4) <<
+        R.at<float>(0, 0), R.at<float>(0, 1), R.at<float>(0, 2), 0,
+        R.at<float>(1, 0), R.at<float>(1, 1), R.at<float>(1, 2), 0,
+        R.at<float>(2, 0), R.at<float>(2, 1), R.at<float>(2, 2), 0);
+
+    cv::Mat K, R2, tvec2, R_x, R_y, R_z, eulerAngles;
+    cv::decomposeProjectionMatrix(projMat, K, R, tvec2,
+				  R_x, R_y, R_z, eulerAngles);
+    double pitch = eulerAngles.at<double>(0, 0);
+    double yaw   = eulerAngles.at<double>(1, 0);
+    double roll  = eulerAngles.at<double>(2, 0);
+    snprintf(text, sizeof(text), "X = %-+4.0f, Y = %-+4.0f, Z = %-+4.0f", pitch, yaw, roll);
+    CommonHelper::drawText(image, text, cv::Point(10, 40), 0.7, 3, cv::Scalar(0, 0, 0), cv::Scalar(255, 255, 255), false);
+}
+#endif
+
+#if 0
+    CameraModel camera;
+    camera.SetIntrinsic(image_input.cols, image_input.rows, FocalLength(image_input.cols, kFovDeg));
+    camera.SetDist({ 0.0f, 0.0f, 0.0f, 0.0f, 0.0f });
+    camera.SetExtrinsic({ 0.0f, 0.0f, 0.0f },    /* rvec [deg] */
+			{ 0.0f, 0.0f, 0.0f }, true);   /* tvec (in world coordinate) */
+
+    estimateHeadPose(image_input, camera, face_list[i].second);
+
+#endif
+
 #define IF_UNDEF(a, b)                          \
     ((a) == Qundef) ? (b) : (a)
 

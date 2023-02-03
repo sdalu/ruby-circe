@@ -46,3 +46,7 @@ File.write('foo-annotated.jpg', out)
 * https://github.com/ShiqiYu/libfacedetection
 * https://github.com/opencv/opencv_zoo/tree/master/models/face_detection_yunet
 * https://github.com/ultralytics/yolov5/releases
+
+# Credit
+
+* `camera_model.h' from iwatake2222
