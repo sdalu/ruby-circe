@@ -119,6 +119,9 @@ static ID id_class;
 static ID id_png;
 static ID id_jpg;
 
+static ID id_label;
+static ID id_thickness;
+static ID id_color;
 
 static Yolo  *yolo;
 static YuNet *yunet;
@@ -143,18 +146,88 @@ draw_label(cv::Mat& img, string label, Point& origin,
 }
 
 static void
-draw_labelbox(cv::Mat& img, string label, Rect& box,
-	      Scalar& framecolor = BLUE, Scalar& textcolor = BLACK,
-	      int thickness = 1) {
+draw_box(cv::Mat& img, Rect& box,
+	 Scalar& framecolor = BLUE, int thickness = 1) {
 
     Point a = { box.x,             box.y              };
     Point b = { box.x + box.width, box.y + box.height };
 
     cv::rectangle(img, a, b, framecolor, thickness);
-    draw_label(img, label, a, textcolor, framecolor);    
+}
+
+static void
+draw_labelbox(cv::Mat& img, string label, Rect& box,
+	      Scalar& framecolor = BLUE, Scalar& textcolor = BLACK,
+	      int thickness = 1) {
+
+    Point o = { box.x, box.y };
+
+    draw_box(img, box, framecolor, thickness);
+    draw_label(img, label, o, textcolor, framecolor);    
 }
 
 
+VALUE
+circe_annotate(Mat& img, Rect& box, VALUE v_annotation, int *state) {
+    if (img.empty() || NIL_P(v_annotation))
+        return Qnil;
+
+    VALUE v_label      = Qnil;
+    VALUE v_color      = ULONG2NUM(0x0000ff);
+    VALUE v_thickness  = INT2NUM(1);
+  
+    VALUE s_label      = rb_id2sym(id_label);
+    VALUE s_color      = rb_id2sym(id_color);
+    VALUE s_thickness  = rb_id2sym(id_thickness);
+
+    switch (TYPE(v_annotation)) {
+    case T_NIL:
+        break;
+    case T_HASH:
+        v_thickness = rb_hash_aref(v_annotation, s_thickness);
+	v_color     = rb_hash_aref(v_annotation, s_color);
+	v_label     = rb_hash_aref(v_annotation, s_label);
+	break;
+    case T_ARRAY:
+        switch(RARRAY_LENINT(v_annotation)) {
+	default:
+	case 3: v_thickness = RARRAY_AREF(v_annotation, 2);
+	case 2: v_color     = RARRAY_AREF(v_annotation, 1);
+	case 1: v_label     = RARRAY_AREF(v_annotation, 0);
+	case 0: break;
+	}
+	break;
+    case T_STRING:
+        v_label = v_annotation;
+	break;
+    }
+  
+    // No color, no rendering
+    if (NIL_P(v_color))
+        return Qnil;
+  
+    long   rgb   = NUM2ULONG(v_color);
+    Scalar color = cv::Scalar((rgb >>  0) & 0xFF,
+			      (rgb >>  8) & 0xFF,
+			      (rgb >> 16) & 0xFF);
+  
+    if (! NIL_P(v_thickness)) {
+        int thickness = NUM2INT(v_thickness);
+	draw_box(img, box, color, thickness);
+    }
+    if (! NIL_P(v_label)) {
+        string label  = StringValueCStr(v_label);
+	Point  o      = { box.x, box.y };
+	draw_label(img, label, o, BLACK, color);
+    }
+
+    // Return normalized parameters
+    VALUE r = rb_hash_new();
+    rb_hash_aset(r, s_label,     v_label    );
+    rb_hash_aset(r, s_color,     v_color    );
+    rb_hash_aset(r, s_thickness, v_thickness);
+    return r;
+}
 
 
 
@@ -186,40 +259,11 @@ yunet_process_features(vector<YuNet::Face>& faces,
 	rb_ary_push(v_features, v_feature);
 	
 	if (!img.empty() && rb_block_given_p()) {
-	    VALUE v_annotation= rb_yield_splat(v_feature);
-	    VALUE v_label     = Qnil;
-	    VALUE v_color     = ULONG2NUM(0x0000ff);
-	    VALUE v_thickness = INT2NUM(1);
+	    VALUE v_annotation = rb_yield_splat(v_feature);
+	    VALUE cfg = circe_annotate(img, box, v_annotation, state);
 
-	    switch (TYPE(v_annotation)) {
-	    case T_NIL:
-		break;
-	    case T_HASH:
-		break;
-	    case T_ARRAY:
-		switch(RARRAY_LENINT(v_annotation)) {
-		default:
-		case 3: v_thickness = RARRAY_AREF(v_annotation, 2);
-		case 2: v_color     = RARRAY_AREF(v_annotation, 1);
-		case 1: v_label     = RARRAY_AREF(v_annotation, 0);
-		case 0: break;
-		}
-		break;
-	    case T_STRING:
-		v_label = v_annotation;
-		break;
-	    }
-	    
-	    if (! NIL_P(v_label)) {
-		string label     = StringValueCStr(v_label);
-		long   rgb       = NUM2ULONG(v_color);
-		int    thickness = NUM2INT(v_thickness);
-		Scalar color     = cv::Scalar((rgb >>  0) & 0xFF,
-					      (rgb >>  8) & 0xFF,
-					      (rgb >> 16) & 0xFF);
-		draw_labelbox(img, label, box, color, BLACK, thickness);
-		
-		for (const auto& p : lmark) {
+	    if (! NIL_P(cfg)) {
+	        for (const auto& p : lmark) {
 		    cv::circle(img, p, 3, cv::Scalar(255, 0, 0), 2);
 		}
 	    }
@@ -248,41 +292,9 @@ yolo_process_features(vector<Yolo::Item>& items,
 						     v_name, v_confidence);
 	rb_ary_push(v_features, v_feature);
 
-	if (rb_block_given_p()) {
+	if (!img.empty() && rb_block_given_p()) {
 	    VALUE v_annotation = rb_yield_splat(v_feature);
-	    
-	    VALUE v_label      = Qnil;
-	    VALUE v_color      = ULONG2NUM(0x0000ff);
-	    VALUE v_thickness  = INT2NUM(1);
-	    
-	    switch (TYPE(v_annotation)) {
-	    case T_NIL:
-		break;
-	    case T_HASH:
-		break;
-	    case T_ARRAY:
-		switch(RARRAY_LENINT(v_annotation)) {
-		default:
-		case 3: v_thickness = RARRAY_AREF(v_annotation, 2);
-		case 2: v_color     = RARRAY_AREF(v_annotation, 1);
-		case 1: v_label     = RARRAY_AREF(v_annotation, 0);
-		case 0: break;
-		}
-		break;
-	    case T_STRING:
-		v_label = v_annotation;
-		break;
-	    }
-	    
-	    if (! NIL_P(v_label)) {
-		string label     = StringValueCStr(v_label);
-		long   rgb       = NUM2ULONG(v_color);
-		int    thickness = NUM2INT(v_thickness);
-		Scalar color     = cv::Scalar((rgb >>  0) & 0xFF,
-					      (rgb >>  8) & 0xFF,
-					      (rgb >> 16) & 0xFF);
-		draw_labelbox(img, label, box, color, BLACK, thickness);
-	    }
+	    circe_annotate(img, box, v_annotation, state);
 	}
     }
 }
@@ -401,12 +413,15 @@ void Init_core(void) {
     yunet = &_yunet;
 
     
-    id_debug       = rb_intern_const("debug"   );
-    id_face        = rb_intern_const("face"    );
-    id_classify    = rb_intern_const("classify");
-    id_class       = rb_intern_const("class"   );
-    id_png         = rb_intern_const("png"     );
-    id_jpg         = rb_intern_const("jpg"     );
+    id_debug       = rb_intern_const("debug"    );
+    id_face        = rb_intern_const("face"     );
+    id_classify    = rb_intern_const("classify" );
+    id_class       = rb_intern_const("class"    );
+    id_png         = rb_intern_const("png"      );
+    id_jpg         = rb_intern_const("jpg"      );
+    id_label       = rb_intern_const("label"    );
+    id_thickness   = rb_intern_const("thickness");
+    id_color       = rb_intern_const("color"    );
     
     
     rb_define_method(cCirce, "analyze", circe_m_analyze, -1);
