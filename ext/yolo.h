@@ -16,12 +16,14 @@ public:
 private:
     static constexpr float INPUT_WIDTH          = 640.0;
     static constexpr float INPUT_HEIGHT         = 640.0;
-    static constexpr float SCORE_THRESHOLD      =   0.5;
-    static constexpr float NMS_THRESHOLD        =   0.45;
-    static constexpr float CONFIDENCE_THRESHOLD =   0.45;
+    static constexpr float CONFIDENCE_THRESHOLD =   0.25;
+    static constexpr float SCORE_THRESHOLD      =   0.45;
+    static constexpr float NMS_THRESHOLD        =   0.50;
 
+    bool letterBoxForSquare = true;
+    
  public:
-    const std::vector<std::string> names = {
+    const std::vector<std::string> classes = {
 	"person", "bicycle", "car", "motorbike", "aeroplane", "bus", "train",
 	"truck", "boat", "traffic light", "fire hydrant", "stop sign",
 	"parking meter", "bench", "bird", "cat", "dog", "horse", "sheep",
@@ -38,11 +40,13 @@ private:
     };
 
 public:
-    Yolo(const std::string& model);
+    Yolo(const std::string& model, cv::Size size);
     void process(cv::Mat &img, std::vector<Item> &items);
     
 private:
     cv::dnn::Net net;
+    cv::Size     size;
+    cv::Mat formatToSquare(const cv::Mat &source);
 };
 
 #endif

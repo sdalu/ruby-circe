@@ -382,11 +382,20 @@ void Init_core(void) {
     eCirceError = rb_define_class_under(cCirce, "Error", rb_eStandardError);
     // myclass = rb_const_get(mymodule, sym_myclass);
 
-    VALUE v_onnx_yolo  = rb_const_get(cCirce, rb_intern("ONNX_YOLO"));
-    VALUE v_onnx_yunet = rb_const_get(cCirce, rb_intern("ONNX_YUNET"));
+    VALUE v_onnx_yolo   = rb_const_get(cCirce, rb_intern("ONNX_YOLO"));
+    VALUE v_yolo_path   = RARRAY_AREF(v_onnx_yolo, 0);
+    VALUE v_yolo_height = RARRAY_AREF(v_onnx_yolo, 1);
+    VALUE v_yolo_width  = RARRAY_AREF(v_onnx_yolo, 2);
 
-    static Yolo  _yolo  = { StringValueCStr(v_onnx_yolo ) };
-    static YuNet _yunet = { StringValueCStr(v_onnx_yunet) };
+    VALUE v_onnx_yunet  = rb_const_get(cCirce, rb_intern("ONNX_YUNET"));
+    VALUE v_yunet_path  = RARRAY_AREF(v_onnx_yunet, 0);
+
+
+    
+    static Yolo  _yolo  = { StringValueCStr(v_yolo_path ),
+			    { NUM2INT(v_yolo_width),
+			      NUM2INT(v_yolo_height) }};
+    static YuNet _yunet = { StringValueCStr(v_yunet_path) };
 
     yolo  = &_yolo;
     yunet = &_yunet;
