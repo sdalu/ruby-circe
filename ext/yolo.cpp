@@ -1,5 +1,6 @@
 /*
  * https://github.com/ultralytics/ultralytics/blob/main/examples/YOLOv8-CPP-Inference/inference.cpp
+ * https://github.com/opencv/opencv/blob/4.x/samples/dnn/yolo_detector.cpp
  *
  * yolov5 has an output of shape:
  *  (batchSize, 25200, 85) (Num classes + box[x,y,w,h] + confidence[c])
@@ -31,11 +32,11 @@ void Yolo::process(cv::Mat &img, std::vector<Yolo::Item> &items) {
     
     // Pre-process
     cv::Mat blob;
-    std::vector<cv::Mat> outputs;
     cv::dnn::blobFromImage(input, blob, 1./255.,
 			   this->size, cv::Scalar(), true, false);
 
     // Process
+    std::vector<cv::Mat> outputs;
     net.setInput(blob);
     net.forward(outputs, net.getUnconnectedOutLayersNames());
 
@@ -51,6 +52,7 @@ void Yolo::process(cv::Mat &img, std::vector<Yolo::Item> &items) {
 
     // Adjust according to version
     if (version == 8) {
+	//  cv::transposeND(outs[0], {0, 2, 1}, outs[0]);
         rows       = outputs[0].size[2];
         dimensions = outputs[0].size[1];
         outputs[0] = outputs[0].reshape(1, dimensions);
