@@ -376,6 +376,10 @@ circe_m_analyze(int argc, VALUE* argv, VALUE self) {
 	cv::imencode(format, o_img, buf);
 	v_image = rb_str_new(reinterpret_cast<char*>(buf.data()), buf.size());
     }
+
+    i_img.release();
+    o_img.release();
+
     return rb_ary_new_from_args(2, v_features, v_image);
 
  exception:
