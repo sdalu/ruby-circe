@@ -91,6 +91,7 @@ static VALUE eCirceError  = Qundef;
 #include <chrono>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/core/mat.hpp>
 
 #include "yolo.h"
 #include "yunet.h"
@@ -232,40 +233,66 @@ circe_annotate(Mat& img, Rect& box, VALUE v_annotation, int *state) {
 
 
 void
-yunet_process_features(vector<YuNet::Face>& faces,
-		       Mat& img, VALUE v_features, int *state)
+yunet_process_features(cv::Mat& faces, Mat& img, VALUE v_features, int *state)
 {
-    for (int i = 0; i < faces.size(); i++) {
-	Rect box              = faces[i].first;
-	YuNet::Landmark lmark = faces[i].second;
+    for (int i = 0; i < faces.rows; i++) {
+	// Face
+	int x_f   = static_cast<int>(faces.at<float>(i,  0));
+        int y_f   = static_cast<int>(faces.at<float>(i,  1));
+        int w_f   = static_cast<int>(faces.at<float>(i,  2));
+        int h_f   = static_cast<int>(faces.at<float>(i,  3));
+	// Right eye
+	int x_re  = static_cast<int>(faces.at<float>(i,  4));
+	int y_re  = static_cast<int>(faces.at<float>(i,  5));
+	// Left eye
+        int x_le  = static_cast<int>(faces.at<float>(i,  6));
+	int y_le  = static_cast<int>(faces.at<float>(i,  7));
+	// Nose tip
+        int x_nt  = static_cast<int>(faces.at<float>(i,  8));
+	int y_nt  = static_cast<int>(faces.at<float>(i,  9));
+        // Right corner mouth
+        int x_rcm = static_cast<int>(faces.at<float>(i, 10));
+	int y_rcm = static_cast<int>(faces.at<float>(i, 11));
+        // Left corner mouth
+	int x_lcm = static_cast<int>(faces.at<float>(i, 12));
+	int y_lcm = static_cast<int>(faces.at<float>(i, 13));
+	// Confidence
+	float confidence = faces.at<float>(i, 14);
 	
-	VALUE v_type       = ID2SYM(id_face);
+        VALUE v_type       = ID2SYM(id_face);
 	VALUE v_box        = rb_ary_new_from_args(4,
-				 INT2NUM(box.x    ), INT2NUM(box.y     ),
-				 INT2NUM(box.width), INT2NUM(box.height));
+				INT2NUM(x_f), INT2NUM(y_f),
+				INT2NUM(w_f), INT2NUM(h_f));
 	VALUE v_landmark   = rb_ary_new_from_args(5,
-			        rb_ary_new_from_args(2, INT2NUM(lmark[0].x),
-						        INT2NUM(lmark[0].y)),
-				rb_ary_new_from_args(2, INT2NUM(lmark[1].x),
-						        INT2NUM(lmark[1].y)),
-				rb_ary_new_from_args(2, INT2NUM(lmark[2].x),
-						        INT2NUM(lmark[2].y)),
-				rb_ary_new_from_args(2, INT2NUM(lmark[3].x),
-						        INT2NUM(lmark[3].y)),
-				rb_ary_new_from_args(2, INT2NUM(lmark[4].x),
-						        INT2NUM(lmark[4].y)));
-	VALUE v_feature    = rb_ary_new_from_args(3, v_type, v_box,
-						     v_landmark);
+			        rb_ary_new_from_args(2, INT2NUM(x_re),
+						        INT2NUM(y_re)),
+			        rb_ary_new_from_args(2, INT2NUM(x_le),
+						        INT2NUM(y_le)),
+			        rb_ary_new_from_args(2, INT2NUM(x_nt),
+						        INT2NUM(y_nt)),
+			        rb_ary_new_from_args(2, INT2NUM(x_rcm),
+						        INT2NUM(y_rcm)),
+				rb_ary_new_from_args(2, INT2NUM(x_lcm),
+							INT2NUM(y_lcm)));
+	VALUE v_confidence = DBL2NUM(confidence);
+	VALUE v_feature    = rb_ary_new_from_args(4, v_type, v_box, v_landmark,
+						  v_confidence);
+
 	rb_ary_push(v_features, v_feature);
+
 	
 	if (!img.empty() && rb_block_given_p()) {
+	    cv::Rect box       = cv::Rect(x_f, y_f, w_f, h_f);
 	    VALUE v_annotation = rb_yield_splat(v_feature);
-	    VALUE cfg = circe_annotate(img, box, v_annotation, state);
+	    VALUE cfg          = circe_annotate(img, box, v_annotation, state);
 
 	    if (! NIL_P(cfg)) {
-	        for (const auto& p : lmark) {
-		    cv::circle(img, p, 3, cv::Scalar(255, 0, 0), 2);
-		}
+		cv::Scalar color = cv::Scalar(255, 0, 0);
+		cv::circle(img, cv::Point(x_le,  y_le ), 3, color, 2);
+		cv::circle(img, cv::Point(x_re,  y_re ), 3, color, 2);
+		cv::circle(img, cv::Point(x_nt,  y_nt ), 3, color, 2);
+		cv::circle(img, cv::Point(x_rcm, y_rcm), 3, color, 2);
+		cv::circle(img, cv::Point(x_lcm, y_lcm), 3, color, 2);
 	    }
 	}
     }
@@ -283,11 +310,11 @@ yolo_process_features(vector<Yolo::Item>& items,
 	Rect   box         = std::get<2>(items[i]);
 	
 	VALUE v_type       = ID2SYM(id_class);
-	VALUE v_name       = rb_str_new(name.c_str(), name.size());
-	VALUE v_confidence = DBL2NUM(confidence);
 	VALUE v_box        = rb_ary_new_from_args(4,
 				  INT2NUM(box.x    ), INT2NUM(box.y     ),
 				  INT2NUM(box.width), INT2NUM(box.height));
+	VALUE v_name       = rb_str_new(name.c_str(), name.size());
+	VALUE v_confidence = DBL2NUM(confidence);
 	VALUE v_feature    = rb_ary_new_from_args(4, v_type, v_box,
 						     v_name, v_confidence);
 	rb_ary_push(v_features, v_feature);
@@ -349,9 +376,10 @@ circe_m_analyze(int argc, VALUE* argv, VALUE self) {
     }
 
     if (RTEST(v_face)) {
-	vector<YuNet::Face> faces;
+	cv::Mat faces;
 	yunet->process(i_img, faces);
 	yunet_process_features(faces, o_img, v_features, &state);
+	faces.release();
 	if (state) goto exception;
     }
 
@@ -375,6 +403,7 @@ circe_m_analyze(int argc, VALUE* argv, VALUE self) {
 	std::vector<uchar> buf;	
 	cv::imencode(format, o_img, buf);
 	v_image = rb_str_new(reinterpret_cast<char*>(buf.data()), buf.size());
+	buf.clear();
     }
 
     i_img.release();

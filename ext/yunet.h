@@ -2,37 +2,37 @@
 #define __YUNET__
 
 #include <string>
-#include <vector>
-#include <array>
-#include <utility>
-
-#include <opencv2/dnn.hpp>
-
+#include <opencv2/objdetect/face.hpp>
+#include <opencv2/core.hpp>
 
 class YuNet
 {
 
 public:
-    typedef std::array<cv::Point, 5> Landmark;
-    typedef std::pair<cv::Rect, Landmark> Face;
-    
-private:
-    static constexpr int                MODEL_WIDTH    = 512;
-    static constexpr float              CONF_THRESHOLD = 0.4f;
-    static constexpr float              NMS_THRESHOLD  = 0.3f;
+    YuNet(const std::string& model_path,
+          const cv::Size&    input_size     = cv::Size(320, 320),
+          float              conf_threshold = 0.6f,
+          float              nms_threshold  = 0.3f,
+          int                top_k          = 5000,
+          int                backend_id     = cv::dnn::DNN_BACKEND_OPENCV,
+          int                target_id      = cv::dnn::DNN_TARGET_CPU)
+    {
+        model = cv::FaceDetectorYN::create(model_path, "", input_size,
+					   conf_threshold,
+					   nms_threshold, top_k,
+					   backend_id, target_id);
+    }
 
-    const std::vector<float>            VARIANCES      = { 0.1f, 0.2f };
-    const std::vector<int>              STEPS          = { 8, 16, 32, 64 };
-    const std::vector<std::vector<int>> MIN_SIZES      = {
-	{ 10, 16, 24 }, { 32, 48 }, { 64, 96 }, { 128, 192, 256 } };
-
-public:
-    YuNet(const std::string& model);
     ~YuNet() {};
-    void process(const cv::Mat& img, std::vector<Face>& faces);
+
+    void process(const cv::Mat& img, cv::Mat& faces) {
+	model->setInputSize(img.size());
+	model->detect(img, faces);
+    }
 
 private:
-    cv::dnn::Net net;
+
+    cv::Ptr<cv::FaceDetectorYN> model;
 };
 
 #endif

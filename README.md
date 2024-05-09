@@ -1,22 +1,23 @@
 # Intro
 
-Based on model from YuNet for face detaction, and YOLO for object
-classification.
+Based on model from YuNet for face detection, and YOLOv8 with COCO training
+for object classification.
 
 
 # Types
 
 ~~~
 :class, box, name, confidence
-:face,  box, landmark
+:face,  box, landmark, confidence
 
+name       : String
 box        : [ x: Integer, y: Integer, width: Integer, height: Integer ]
-confidence : Integer
-landmark   : [ left_eye  : [ x: Integer, y: Integer ],
-               right_eye : [ x: Integer, y: Integer ],
-               nose      : [ x: Integer, y: Integer ],
-               left_lip  : [ x: Integer, y: Integer ],
-               right_lip : [ x: Integer, y: Integer ] ]
+confidence : Float
+landmark   : [ left_eye           : [ x: Integer, y: Integer ],
+               right_eye          : [ x: Integer, y: Integer ],
+               nose_tip           : [ x: Integer, y: Integer ],
+               left_corner_mouth  : [ x: Integer, y: Integer ],
+               right_corner_mouth : [ x: Integer, y: Integer ] ]
 ~~~
 
 # Example
@@ -27,10 +28,10 @@ require 'circe'
 $circe = Circe::new
 
 img = File.read('foo.jpg')
-features, out = $circe.analyze(img, :jpg) do |type, box, *args|
+features, out = $circe.analyze(img, :jpg) do |type, box, *args, confidence|
     case type
     when :class
-        name, confidence = args
+        name, = args
         next nil unless [ 'person' ].include?(name)
         [ "%s: %.2f" % [ name, confidence ], 0xff00f0, 5 ]
     when :face
@@ -49,4 +50,4 @@ File.write('foo-annotated.jpg', out)
 
 # Credit
 
-* `camera_model.h' from iwatake2222
+* `camera_model.h` from iwatake2222

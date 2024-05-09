@@ -17,7 +17,7 @@ private:
     static constexpr float INPUT_WIDTH          = 640.0;
     static constexpr float INPUT_HEIGHT         = 640.0;
     static constexpr float CONFIDENCE_THRESHOLD =   0.25;
-    static constexpr float SCORE_THRESHOLD      =   0.45;
+    static constexpr float SCORE_THRESHOLD      =   0.50;
     static constexpr float NMS_THRESHOLD        =   0.50;
 
     bool letterBoxForSquare = true;
