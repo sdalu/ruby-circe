@@ -122,6 +122,7 @@ static ID id_jpg;
 
 static ID id_label;
 static ID id_thickness;
+static ID id_extra;
 static ID id_color;
 
 static Yolo  *yolo;
@@ -176,11 +177,13 @@ circe_annotate(Mat& img, Rect& box, VALUE v_annotation, int *state) {
     VALUE v_label      = Qnil;
     VALUE v_color      = ULONG2NUM(0x0000ff);
     VALUE v_thickness  = INT2NUM(1);
+    VALUE v_extra      = Qtrue;
   
     VALUE s_label      = rb_id2sym(id_label);
     VALUE s_color      = rb_id2sym(id_color);
     VALUE s_thickness  = rb_id2sym(id_thickness);
-
+    VALUE s_extra      = rb_id2sym(id_extra);
+    
     switch (TYPE(v_annotation)) {
     case T_NIL:
         break;
@@ -188,6 +191,7 @@ circe_annotate(Mat& img, Rect& box, VALUE v_annotation, int *state) {
         v_thickness = rb_hash_lookup2(v_annotation, s_thickness, v_thickness);
 	v_color     = rb_hash_lookup2(v_annotation, s_color,     v_color    );
 	v_label     = rb_hash_lookup2(v_annotation, s_label,     v_label    );
+	v_extra     = rb_hash_lookup2(v_annotation, s_extra,     v_extra    );
 	break;
     case T_ARRAY:
         switch(RARRAY_LENINT(v_annotation)) {
@@ -227,6 +231,7 @@ circe_annotate(Mat& img, Rect& box, VALUE v_annotation, int *state) {
     rb_hash_aset(r, s_label,     v_label    );
     rb_hash_aset(r, s_color,     v_color    );
     rb_hash_aset(r, s_thickness, v_thickness);
+    rb_hash_aset(r, s_extra,     v_extra    );
     return r;
 }
 
@@ -285,8 +290,9 @@ yunet_process_features(cv::Mat& faces, Mat& img, VALUE v_features, int *state)
 	    cv::Rect box       = cv::Rect(x_f, y_f, w_f, h_f);
 	    VALUE v_annotation = rb_yield_splat(v_feature);
 	    VALUE cfg          = circe_annotate(img, box, v_annotation, state);
+	    VALUE s_extra      = rb_id2sym(id_extra);
 
-	    if (! NIL_P(cfg)) {
+	    if (!NIL_P(cfg) && RTEST(rb_hash_aref(cfg, s_extra))) {
 		cv::Scalar color = cv::Scalar(255, 0, 0);
 		cv::circle(img, cv::Point(x_le,  y_le ), 3, color, 2);
 		cv::circle(img, cv::Point(x_re,  y_re ), 3, color, 2);
@@ -454,6 +460,7 @@ void Init_core(void) {
     id_jpg         = rb_intern_const("jpg"      );
     id_label       = rb_intern_const("label"    );
     id_thickness   = rb_intern_const("thickness");
+    id_extra       = rb_intern_const("extra"    );
     id_color       = rb_intern_const("color"    );
     
     
