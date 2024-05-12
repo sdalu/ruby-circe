@@ -185,9 +185,9 @@ circe_annotate(Mat& img, Rect& box, VALUE v_annotation, int *state) {
     case T_NIL:
         break;
     case T_HASH:
-        v_thickness = rb_hash_aref(v_annotation, s_thickness);
-	v_color     = rb_hash_aref(v_annotation, s_color);
-	v_label     = rb_hash_aref(v_annotation, s_label);
+        v_thickness = rb_hash_lookup2(v_annotation, s_thickness, v_thickness);
+	v_color     = rb_hash_lookup2(v_annotation, s_color,     v_color    );
+	v_label     = rb_hash_lookup2(v_annotation, s_label,     v_label    );
 	break;
     case T_ARRAY:
         switch(RARRAY_LENINT(v_annotation)) {
