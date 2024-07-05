@@ -10,6 +10,6 @@ cflags, ldflags, libs = pkg_config('opencv4')
 
 $LDFLAGS  += " #{ldflags} #{libs}"
 $INCFLAGS += " #{cflags}"
-$CXXFLAGS += "-std=c++17"
+$CXXFLAGS += " -std=c++17"
 
 create_makefile("circe/core")
