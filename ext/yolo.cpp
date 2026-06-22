@@ -63,8 +63,8 @@ void Yolo::process(cv::Mat &img, std::vector<Yolo::Item> &items) {
     float *data    = (float *)outputs[0].data;
 
     // Resizing factor.
-    float x_factor = input.cols / size.width;
-    float y_factor = input.rows / size.height;
+    float x_factor = (float)input.cols / size.width;
+    float y_factor = (float)input.rows / size.height;
 
     // Post-process
     std::vector<int>       class_ids;
