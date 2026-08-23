@@ -85,6 +85,32 @@ shape nodes that release carries, and fails on a Concat. The other size
 must come from a release exported at it, or from a fresh `yolo export`:
 reshaping an already static model breaks its attention blocks.
 
+# Benchmark
+
+`rake bench` reports startup, the cost of each detector, and what
+encoding an annotated image adds, as min/avg/max over N rounds. Compare
+the minimum: it is the one least polluted by whatever else the machine
+is doing, and a wide spread is the sign that something else was.
+
+~~~
+rake bench
+rake bench N=20 IMAGE=frame.jpg
+rake bench MODEL=data/yolo11n.onnx SIZE=640x480
+~~~
+
+For reference, a raspberry pi 4 running the bundled model:
+
+~~~
+  load                  1623 ms
+  cold analyze          1372 ms
+                         min     avg     max
+  classify               836    1145    1873 ms
+  face                    57      74      87 ms
+  both                   640     674     719 ms
+  both + jpg             616     734     912 ms
+  peak rss               198 MB
+~~~
+
 # Example
 
 ~~~ruby

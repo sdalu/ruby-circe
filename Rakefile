@@ -41,4 +41,9 @@ end
 
 task test: :compile
 
+desc "Latency benchmark (N=, IMAGE=, MODEL=, SIZE=)"
+task bench: :compile do
+    ruby "benchmark/run.rb"
+end
+
 task default: :test
