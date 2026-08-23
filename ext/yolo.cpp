@@ -7,8 +7,12 @@
  * yolov8 has an output of shape:
  *  (batchSize, 84,  8400) (Num classes + box[x,y,w,h])
  *
- * yolo export model=yolov8s.pt imgsz=480,640 format=onnx opset=12
- */ 
+ * yolo export model=yolo11n.pt imgsz=480,640 format=onnx opset=12
+ *
+ * An export with dynamic axes has to be frozen to a static input shape,
+ * opencv's ONNX importer cannot fold those and fails on a Concat:
+ *   onnxslim yolo11n.onnx out.onnx --input-shapes images:1,3,480,640
+ */
 #include <tuple>
 #include <string>
 #include <cstdio>

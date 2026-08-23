@@ -1,6 +1,6 @@
 # Intro
 
-Based on model from YuNet for face detection, and YOLOv8 with COCO training
+Based on model from YuNet for face detection, and YOLO11 with COCO training
 for object classification.
 
 
@@ -70,6 +70,20 @@ covers yolov5u, yolov8 and yolo11. It does *not* cover an end-to-end or
 The path and input size are set by `ONNX_YOLO` in `lib/circe.rb`, and the
 size must match what the model was exported with. A square size makes the
 image letterboxed rather than squashed.
+
+The bundled `data/yolo11n.onnx` is the ultralytics release asset, frozen
+to a static 480x640 input:
+
+~~~sh
+curl -LO https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.onnx
+# sha256 634279b40c07c6391472c51ad45b81ebc48706a9a1fe72dd3396322acd0c053b
+onnxslim yolo11n.onnx data/yolo11n.onnx --input-shapes images:1,3,480,640
+~~~
+
+Freezing is needed because opencv's ONNX importer cannot fold the dynamic
+shape nodes that release carries, and fails on a Concat. The other size
+must come from a release exported at it, or from a fresh `yolo export`:
+reshaping an already static model breaks its attention blocks.
 
 # Example
 
