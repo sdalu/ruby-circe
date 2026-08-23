@@ -82,7 +82,9 @@ yolo26 can still be used, by exporting the raw head instead:
 yolo export model=yolo26n.pt format=onnx imgsz=480,640 end2end=False
 ~~~
 
-That gives `(1, 84, 6300)`, which opencv computes correctly -- checked
+which is how the bundled `data/yolo26n.onnx` was produced (ultralytics
+8.4.127, sha256 27f517d4…). That gives `(1, 84, 6300)`, computed
+correctly by opencv -- checked
 against onnxruntime, same 2e-6 -- and which needs no change here. It is
 not currently worth it though: measured against yolo11n it classifies
 about a quarter slower and finds fewer objects at any threshold. The
@@ -94,8 +96,12 @@ The path and input size are set by `ONNX_YOLO` in `lib/circe.rb`, and the
 size must match what the model was exported with. A square size makes the
 image letterboxed rather than squashed.
 
-The bundled `data/yolo11n.onnx` is the ultralytics release asset, frozen
-to a static 480x640 input:
+Two are bundled, both 480x640 and both on the 80 COCO classes:
+`yolo11n.onnx` is the default, `yolo26n.onnx` is there for comparison and
+is selected by changing the name in `ONNX_YOLO`.
+
+`data/yolo11n.onnx` is the ultralytics release asset, frozen to a static
+480x640 input:
 
 ~~~sh
 curl -LO https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.onnx
