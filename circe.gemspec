@@ -21,7 +21,8 @@ Gem::Specification.new do |s|
         'bug_tracker_uri' => "#{s.homepage}/issues",
     }
 
-    s.required_ruby_version = '>= 3.0'
+    # 3.4 for `it`, used by the test suite and the documented examples
+    s.required_ruby_version = '>= 3.4'
 
     s.extensions  = [ 'ext/extconf.rb' ]
 
