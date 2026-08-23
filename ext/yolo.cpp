@@ -11,6 +11,8 @@
  */ 
 #include <tuple>
 #include <string>
+#include <cstdio>
+#include <stdexcept>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/dnn.hpp>
 
@@ -23,7 +25,8 @@ Yolo::Yolo(const std::string& model, cv::Size size) {
 }
 
 
-void Yolo::process(cv::Mat &img, std::vector<Yolo::Item> &items) {
+void Yolo::process(cv::Mat &img, std::vector<Yolo::Item> &items,
+		   const Yolo::Threshold &threshold) {
     int version = 5;
 
     cv::Mat input = img;
@@ -41,6 +44,9 @@ void Yolo::process(cv::Mat &img, std::vector<Yolo::Item> &items) {
     net.forward(outputs, net.getUnconnectedOutLayersNames());
 
     // Output
+    if (outputs.empty() || (outputs[0].dims != 3))
+	throw std::invalid_argument("yolo: expected a 3 dimensional output");
+
     int    rows       = outputs[0].size[1];
     int    dimensions = outputs[0].size[2];
 
@@ -57,6 +63,24 @@ void Yolo::process(cv::Mat &img, std::vector<Yolo::Item> &items) {
         dimensions = outputs[0].size[1];
         outputs[0] = outputs[0].reshape(1, dimensions);
         cv::transpose(outputs[0], outputs[0]);
+    }
+
+    /* By now dimensions is the width of one prediction: 4 box values, an
+     * objectness for v5 only, then one score per class. Only those two
+     * layouts can be decoded. An end-to-end export (yolo26, or nms=True)
+     * gives 6 values per detection instead, which would be taken for a v5
+     * row and read right off the end of the tensor, reporting confident
+     * nonsense on the way.
+     */
+    size_t expected = classes.size() + ((version == 5) ? 5 : 4);
+    if ((size_t)dimensions != expected) {
+	char msg[256];
+	snprintf(msg, sizeof(msg),
+		 "yolo: cannot decode a model giving %d values per "
+		 "prediction, expected %zu for %zu classes; an end-to-end "
+		 "or nms=True export is not supported",
+		 dimensions, expected, classes.size());
+	throw std::invalid_argument(msg);
     }
 
     // Output
@@ -76,7 +100,7 @@ void Yolo::process(cv::Mat &img, std::vector<Yolo::Item> &items) {
 	for (int i = 0; i < rows; ++i) {
             float confidence = data[4];
 
-            if (confidence >= CONFIDENCE_THRESHOLD) {
+            if (confidence >= threshold.confidence) {
                 float *classes_scores = data + 5;
 
                 cv::Mat scores(1, classes.size(), CV_32FC1, classes_scores);
@@ -85,7 +109,7 @@ void Yolo::process(cv::Mat &img, std::vector<Yolo::Item> &items) {
 
                 minMaxLoc(scores, 0, &max_class_score, 0, &class_id);
 
-                if (max_class_score > SCORE_THRESHOLD) {
+                if (max_class_score > threshold.score) {
                     confidences.push_back(confidence);
                     class_ids.push_back(class_id.x);
 
@@ -114,7 +138,7 @@ void Yolo::process(cv::Mat &img, std::vector<Yolo::Item> &items) {
 
             minMaxLoc(scores, 0, &maxClassScore, 0, &class_id);
 
-            if (maxClassScore > SCORE_THRESHOLD) {
+            if (maxClassScore > threshold.score) {
                 confidences.push_back(maxClassScore);
                 class_ids.push_back(class_id.x);
 
@@ -138,7 +162,7 @@ void Yolo::process(cv::Mat &img, std::vector<Yolo::Item> &items) {
     // Perform Non-Maximum Suppression and draw predictions.
     std::vector<int> nms_result;
     cv::dnn::NMSBoxes(boxes, confidences,
-		      SCORE_THRESHOLD, NMS_THRESHOLD, nms_result);
+		      threshold.score, threshold.nms, nms_result);
 
     items.clear();
 
