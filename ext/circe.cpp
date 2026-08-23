@@ -89,8 +89,11 @@ static VALUE eCirceError  = Qundef;
 #include <tuple>
 #include <string>
 #include <chrono>
+#include <cmath>
+#include <stdexcept>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <opencv2/core/mat.hpp>
 
 #include "yolo.h"
@@ -129,6 +132,15 @@ static Yolo  *yolo;
 static YuNet *yunet;
 
 
+/* Both ruby and C++ unwind, but not in a way the other understands:
+ * rb_raise()/rb_jump_tag() longjmp() over the C++ destructors, and a C++
+ * exception escaping into a ruby C frame ends up in std::terminate().
+ * So errors raised while C++ objects are alive are stashed in a plain
+ * buffer and turned into a ruby exception once every C++ frame is gone.
+ */
+#define CIRCE_ERRSZ 512
+
+
 
 static void
 draw_label(cv::Mat& img, string label, Point& origin,
@@ -144,7 +156,7 @@ draw_label(cv::Mat& img, string label, Point& origin,
     Point t = { a.x, a.y + label_size.height };
     
     cv::rectangle(img, a, b, bgcolor, cv::FILLED);
-    cv::putText(img, label, t, FONT_FACE, FONT_SCALE, fgcolor, THICKNESS);
+    cv::putText(img, label, t, FONT_FACE, FONT_SCALE, fgcolor, thickness);
 }
 
 static void
@@ -169,8 +181,8 @@ draw_labelbox(cv::Mat& img, string label, Rect& box,
 }
 
 
-VALUE
-circe_annotate(Mat& img, Rect& box, VALUE v_annotation, int *state) {
+static VALUE
+circe_annotate(Mat& img, Rect& box, VALUE v_annotation) {
     if (img.empty() || NIL_P(v_annotation))
         return Qnil;
 
@@ -210,19 +222,24 @@ circe_annotate(Mat& img, Rect& box, VALUE v_annotation, int *state) {
     // No color, no rendering
     if (NIL_P(v_color))
         return Qnil;
-  
-    long   rgb   = NUM2ULONG(v_color);
+
+    // Perform every ruby -> C conversion up front: they can raise, and a
+    // raise longjmp()s away, which would skip the destructor of any C++
+    // object still alive at that point.
+    unsigned long rgb       = NUM2ULONG(v_color);
+    int           thickness = NIL_P(v_thickness) ? 0 : NUM2INT(v_thickness);
+    const char   *label     = NIL_P(v_label)     ? NULL
+                                                 : StringValueCStr(v_label);
+
     Scalar color = cv::Scalar((rgb >>  0) & 0xFF,
 			      (rgb >>  8) & 0xFF,
 			      (rgb >> 16) & 0xFF);
-  
+
     if (! NIL_P(v_thickness)) {
-        int thickness = NUM2INT(v_thickness);
 	draw_box(img, box, color, thickness);
     }
-    if (! NIL_P(v_label)) {
-        string label  = StringValueCStr(v_label);
-	Point  o      = { box.x, box.y };
+    if (label != NULL) {
+	Point o = { box.x, box.y };
 	draw_label(img, label, o, BLACK, color);
     }
 
@@ -236,11 +253,89 @@ circe_annotate(Mat& img, Rect& box, VALUE v_annotation, int *state) {
 }
 
 
+struct circe_annotate_args {
+    Mat   *img;
+    Rect  *box;
+    VALUE  feature;
+    VALUE  cfg;		/* out */
+    char  *errmsg;	/* out, CIRCE_ERRSZ bytes */
+};
+
+/* Body of the protected call: yield the feature to the block and apply
+ * whatever annotation it returned. Kept free of any object needing
+ * destruction, as rb_protect() unwinds it with longjmp().
+ */
+static VALUE
+circe_annotate_protected(VALUE arg) {
+    struct circe_annotate_args *a = (struct circe_annotate_args *)arg;
+
+    try {
+	VALUE v_annotation = rb_yield_splat(a->feature);
+	a->cfg = circe_annotate(*a->img, *a->box, v_annotation);
+    } catch (const std::exception& e) {
+	snprintf(a->errmsg, CIRCE_ERRSZ, "%s", e.what());
+	a->cfg = Qnil;
+    }
+    return Qnil;
+}
+
+/* Yield to the block, shielded from both worlds: a ruby exception is
+ * captured by rb_protect() into *state, a C++ one into errmsg. Either way
+ * the caller unwinds normally and lets its own destructors run.
+ */
+static VALUE
+circe_yield_annotate(Mat& img, Rect& box, VALUE v_feature,
+		     int *state, char *errmsg) {
+    struct circe_annotate_args a = { &img, &box, v_feature, Qnil, errmsg };
+
+    rb_protect(circe_annotate_protected, (VALUE)&a, state);
+    return *state ? Qnil : a.cfg;
+}
+
+
+
+/* On a degenerate input (a 1x1 image, say) the detector can hand back a
+ * row of uninitialised or non-finite floats. Casting those to int is
+ * undefined behaviour, and in practice gives INT_MIN coordinates that are
+ * then reported as a face and passed to openCV for drawing. Such rows are
+ * dropped: a face has a positive extent, lies somewhere near the picture,
+ * and has coordinates no image could ever reach.
+ */
+static bool
+yunet_face_is_sane(const cv::Mat& faces, int i, const cv::Size& size)
+{
+    static const float LIMIT = 1.0e6f;	/* beyond any image dimension */
+
+    for (int j = 0; j < faces.cols; j++) {
+	float v = faces.at<float>(i, j);
+	if (!std::isfinite(v) || (std::fabs(v) > LIMIT))
+	    return false;
+    }
+
+    cv::Rect2f box   = { faces.at<float>(i, 0), faces.at<float>(i, 1),
+			 faces.at<float>(i, 2), faces.at<float>(i, 3) };
+    cv::Rect2f frame = { 0.0f, 0.0f,
+			 (float)size.width, (float)size.height };
+
+    return (box.width > 0.0f) && (box.height > 0.0f) &&
+	   ((box & frame).area() > 0.0f);
+}
+
+
 
 void
-yunet_process_features(cv::Mat& faces, Mat& img, VALUE v_features, int *state)
+yunet_process_features(cv::Mat& faces, const cv::Size& size,
+		       Mat& img, VALUE v_features,
+		       int *state, char *errmsg)
 {
+    /* Expected layout: box, 5 landmarks, confidence */
+    if (faces.empty() || (faces.cols < 15))
+	return;
+
     for (int i = 0; i < faces.rows; i++) {
+	if (!yunet_face_is_sane(faces, i, size))
+	    continue;
+
 	// Face
 	int x_f   = static_cast<int>(faces.at<float>(i,  0));
         int y_f   = static_cast<int>(faces.at<float>(i,  1));
@@ -287,10 +382,13 @@ yunet_process_features(cv::Mat& faces, Mat& img, VALUE v_features, int *state)
 
 	
 	if (!img.empty() && rb_block_given_p()) {
-	    cv::Rect box       = cv::Rect(x_f, y_f, w_f, h_f);
-	    VALUE v_annotation = rb_yield_splat(v_feature);
-	    VALUE cfg          = circe_annotate(img, box, v_annotation, state);
-	    VALUE s_extra      = rb_id2sym(id_extra);
+	    cv::Rect box  = cv::Rect(x_f, y_f, w_f, h_f);
+	    VALUE    cfg  = circe_yield_annotate(img, box, v_feature,
+						 state, errmsg);
+	    if (*state || errmsg[0])
+		return;
+
+	    VALUE s_extra = rb_id2sym(id_extra);
 
 	    if (!NIL_P(cfg) && RTEST(rb_hash_aref(cfg, s_extra))) {
 		cv::Scalar color = cv::Scalar(255, 0, 0);
@@ -308,13 +406,13 @@ yunet_process_features(cv::Mat& faces, Mat& img, VALUE v_features, int *state)
 
 void
 yolo_process_features(vector<Yolo::Item>& items,
-		      Mat& img, VALUE v_features, int *state)
-{   
-    for (int i = 0; i < items.size(); i++) {
-	string name        = std::get<0>(items[i]);
+		      Mat& img, VALUE v_features, int *state, char *errmsg)
+{
+    for (size_t i = 0; i < items.size(); i++) {
+	const string& name = std::get<0>(items[i]);
 	float  confidence  = std::get<1>(items[i]);
 	Rect   box         = std::get<2>(items[i]);
-	
+
 	VALUE v_type       = ID2SYM(id_class);
 	VALUE v_box        = rb_ary_new_from_args(4,
 				  INT2NUM(box.x    ), INT2NUM(box.y     ),
@@ -326,8 +424,9 @@ yolo_process_features(vector<Yolo::Item>& items,
 	rb_ary_push(v_features, v_feature);
 
 	if (!img.empty() && rb_block_given_p()) {
-	    VALUE v_annotation = rb_yield_splat(v_feature);
-	    circe_annotate(img, box, v_annotation, state);
+	    circe_yield_annotate(img, box, v_feature, state, errmsg);
+	    if (*state || errmsg[0])
+		return;
 	}
     }
 }
@@ -338,89 +437,113 @@ static VALUE
 circe_m_analyze(int argc, VALUE* argv, VALUE self) {
     // Retrieve arguments
     VALUE v_imgstr, v_format, v_opts;
-    VALUE kwargs[3];
+    VALUE kwargs[3] = { Qundef, Qundef, Qundef };
     rb_scan_args(argc, argv, "11:", &v_imgstr, &v_format, &v_opts);
-    rb_get_kwargs(v_opts, (ID[]){ id_debug, id_face, id_classify },
-		  0, 3, kwargs);
-    VALUE v_debug    = IF_UNDEF(kwargs[0], Qfalse);
-    VALUE v_face     = IF_UNDEF(kwargs[1], Qfalse);
-    VALUE v_classify = IF_UNDEF(kwargs[2], Qfalse);
+    // Note: rb_get_kwargs() leaves kwargs[] untouched on a nil hash
+    if (! NIL_P(v_opts))
+	rb_get_kwargs(v_opts, (ID[]){ id_debug, id_face, id_classify },
+		      0, 3, kwargs);
 
-    VALUE v_features = rb_ary_new();
-    VALUE v_image    = Qnil;
-    
+    VALUE v_debug    = IF_UNDEF(kwargs[0], Qfalse);
+    VALUE v_face     = kwargs[1];
+    VALUE v_classify = kwargs[2];
+
+    // Selecting is either positive (run only what was asked for) or by
+    // exclusion (run everything but what was refused). Qundef means the
+    // key wasn't given at all, which is what tells the two modes apart:
+    // an explicit false must disable that one without enabling the other.
+    bool face_given     = (v_face     != Qundef);
+    bool classify_given = (v_classify != Qundef);
+    bool face_on        = face_given     && RTEST(v_face    );
+    bool classify_on    = classify_given && RTEST(v_classify);
+
+    if (!face_on && !classify_on) {
+	face_on     = !face_given     || RTEST(v_face    );
+	classify_on = !classify_given || RTEST(v_classify);
+    }
+
+    v_face     = face_on     ? Qtrue : Qfalse;
+    v_classify = classify_on ? Qtrue : Qfalse;
+
+    // Image is taken as a raw byte string, ensure that's what we got
+    StringValue(v_imgstr);
+
     if (! NIL_P(v_format)) {
 	Check_Type(v_format, T_SYMBOL);
 	ID i_format = rb_sym2id(v_format);
 	if ((i_format != id_png) && (i_format != id_jpg))
 	    rb_raise(rb_eArgError, "format must be :png, :jpg or nil");
     }
-    
-    if (!RTEST(v_face) && !RTEST(v_classify)) {
-	v_face = v_classify = Qtrue;
-    }
 
+    VALUE v_features            = rb_ary_new();
+    VALUE v_image               = Qnil;
+    int   state                 = 0;
+    char  errmsg[CIRCE_ERRSZ]   = { 0 };
 
-    // Load image.
-    Mat i_img = cv::imdecode(cv::Mat(1, RSTRING_LEN(v_imgstr), CV_8UC1,
+    // Everything below builds C++ objects, so neither rb_raise() nor
+    // rb_jump_tag() can be used from here: they longjmp() over the
+    // destructors. Errors are recorded and replayed once the scope is left.
+    {
+	try {
+	    // Load image. IMREAD_COLOR (and not IMREAD_UNCHANGED) as both
+	    // networks want 3 channels: greyscale and alpha would abort.
+	    Mat i_img =
+		cv::imdecode(cv::Mat(1, RSTRING_LEN(v_imgstr), CV_8UC1,
 				     (unsigned char *)RSTRING_PTR(v_imgstr)),
-			     IMREAD_UNCHANGED);	    
-    Mat o_img = NIL_P(v_format) ? cv::Mat() : i_img.clone();
+			     IMREAD_COLOR);
+	    if (i_img.empty())
+		throw std::runtime_error("unable to decode image");
 
-    // Processing
-    std::chrono::time_point<std::chrono::system_clock> start_time, end_time;
-    std::chrono::duration<double> duration;
-    int state = 0;
+	    Mat o_img = NIL_P(v_format) ? cv::Mat() : i_img.clone();
 
-    start_time = std::chrono::system_clock::now();
-    
-    if (RTEST(v_classify)) {
-	vector<Yolo::Item> items;
-	yolo->process(i_img, items);
-	yolo_process_features(items, o_img, v_features, &state);
-	if (state) goto exception;
-    }
+	    // Processing
+	    auto start_time = std::chrono::system_clock::now();
 
-    if (RTEST(v_face)) {
-	cv::Mat faces;
-	yunet->process(i_img, faces);
-	yunet_process_features(faces, o_img, v_features, &state);
-	faces.release();
-	if (state) goto exception;
-    }
+	    if (RTEST(v_classify)) {
+		vector<Yolo::Item> items;
+		yolo->process(i_img, items);
+		yolo_process_features(items, o_img, v_features,
+				      &state, errmsg);
+	    }
 
-    end_time = std::chrono::system_clock::now();
-    duration = end_time - start_time;
-    
+	    if (!state && !errmsg[0] && RTEST(v_face)) {
+		cv::Mat faces;
+		yunet->process(i_img, faces);
+		yunet_process_features(faces, i_img.size(), o_img,
+				       v_features, &state, errmsg);
+	    }
 
-    if (! NIL_P(v_format)) {
-	if (RTEST(v_debug)) {
-	    double ms    = duration / 1.0ms;
-	    string label = cv::format("Inference time : %0.2f ms", ms);
-	    cv::putText(o_img, label, Point(20, 40),
-			FONT_FACE, FONT_SCALE, RED);
+	    auto end_time = std::chrono::system_clock::now();
+	    std::chrono::duration<double> duration = end_time - start_time;
+
+	    if (!state && !errmsg[0] && !NIL_P(v_format)) {
+		if (RTEST(v_debug)) {
+		    double ms    = duration / 1.0ms;
+		    string label = cv::format("Inference time : %0.2f ms", ms);
+		    cv::putText(o_img, label, Point(20, 40),
+				FONT_FACE, FONT_SCALE, RED);
+		}
+
+		ID i_format   = rb_sym2id(v_format);
+		string format = (i_format == id_png) ? ".png" : ".jpg";
+
+		std::vector<uchar> buf;
+		cv::imencode(format, o_img, buf);
+		v_image = rb_str_new(reinterpret_cast<char*>(buf.data()),
+				     buf.size());
+	    }
+	} catch (const cv::Exception& e) {
+	    snprintf(errmsg, sizeof(errmsg), "%s", e.what());
+	} catch (const std::exception& e) {
+	    snprintf(errmsg, sizeof(errmsg), "%s", e.what());
 	}
-
-	ID   i_format = rb_sym2id(v_format);
-	string format;
-	if      (i_format == id_png) { format = ".png"; }
-	else if (i_format == id_jpg) { format = ".jpg"; }
-
-	std::vector<uchar> buf;	
-	cv::imencode(format, o_img, buf);
-	v_image = rb_str_new(reinterpret_cast<char*>(buf.data()), buf.size());
-	buf.clear();
     }
 
-    i_img.release();
-    o_img.release();
+    // Every C++ frame is gone, longjmp() is safe again
+    if (errmsg[0]) rb_raise(eCirceError, "%s", errmsg);
+    if (state    ) rb_jump_tag(state);
 
     return rb_ary_new_from_args(2, v_features, v_image);
-
- exception:
-    i_img.release();
-    o_img.release();
-    rb_jump_tag(state);
 }
 
 
@@ -433,25 +556,44 @@ void Init_core(void) {
     eCirceError = rb_define_class_under(cCirce, "Error", rb_eStandardError);
     // myclass = rb_const_get(mymodule, sym_myclass);
 
-    VALUE v_onnx_yolo   = rb_const_get(cCirce, rb_intern("ONNX_YOLO"));
-    VALUE v_yolo_path   = RARRAY_AREF(v_onnx_yolo, 0);
-    VALUE v_yolo_height = RARRAY_AREF(v_onnx_yolo, 1);
-    VALUE v_yolo_width  = RARRAY_AREF(v_onnx_yolo, 2);
-
+    VALUE v_onnx_yolo   = rb_const_get(cCirce, rb_intern("ONNX_YOLO" ));
     VALUE v_onnx_yunet  = rb_const_get(cCirce, rb_intern("ONNX_YUNET"));
+    Check_Type(v_onnx_yolo,  T_ARRAY);
+    Check_Type(v_onnx_yunet, T_ARRAY);
+    if ((RARRAY_LEN(v_onnx_yolo) < 3) || (RARRAY_LEN(v_onnx_yunet) < 1))
+	rb_raise(eCirceError, "malformed ONNX_YOLO/ONNX_YUNET definition");
+
+    VALUE v_yolo_path   = RARRAY_AREF(v_onnx_yolo,  0);
+    VALUE v_yolo_height = RARRAY_AREF(v_onnx_yolo,  1);
+    VALUE v_yolo_width  = RARRAY_AREF(v_onnx_yolo,  2);
     VALUE v_yunet_path  = RARRAY_AREF(v_onnx_yunet, 0);
 
+    // Convert before reaching C++: these can raise, and raising longjmp()s
+    const char *yolo_path   = StringValueCStr(v_yolo_path );
+    const char *yunet_path  = StringValueCStr(v_yunet_path);
+    int         yolo_width  = NUM2INT(v_yolo_width );
+    int         yolo_height = NUM2INT(v_yolo_height);
 
-    
-    static Yolo  _yolo  = { StringValueCStr(v_yolo_path ),
-			    { NUM2INT(v_yolo_width),
-			      NUM2INT(v_yolo_height) }};
-    static YuNet _yunet = { StringValueCStr(v_yunet_path) };
+    // A missing or corrupted model makes openCV throw, which would abort
+    // the whole process during require. Turn it into a ruby exception.
+    char errmsg[CIRCE_ERRSZ] = { 0 };
+    {
+	try {
+	    static Yolo  _yolo  = { yolo_path, { yolo_width, yolo_height } };
+	    static YuNet _yunet = { yunet_path };
 
-    yolo  = &_yolo;
-    yunet = &_yunet;
+	    yolo  = &_yolo;
+	    yunet = &_yunet;
+	} catch (const cv::Exception& e) {
+	    snprintf(errmsg, sizeof(errmsg), "%s", e.what());
+	} catch (const std::exception& e) {
+	    snprintf(errmsg, sizeof(errmsg), "%s", e.what());
+	}
+    }
+    if (errmsg[0])
+	rb_raise(eCirceError, "failed to load model: %s", errmsg);
 
-    
+
     id_debug       = rb_intern_const("debug"    );
     id_face        = rb_intern_const("face"     );
     id_classify    = rb_intern_const("classify" );

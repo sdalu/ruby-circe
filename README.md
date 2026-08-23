@@ -13,11 +13,11 @@ for object classification.
 name       : String
 box        : [ x: Integer, y: Integer, width: Integer, height: Integer ]
 confidence : Float
-landmark   : [ left_eye           : [ x: Integer, y: Integer ],
-               right_eye          : [ x: Integer, y: Integer ],
+landmark   : [ right_eye          : [ x: Integer, y: Integer ],
+               left_eye           : [ x: Integer, y: Integer ],
                nose_tip           : [ x: Integer, y: Integer ],
-               left_corner_mouth  : [ x: Integer, y: Integer ],
-               right_corner_mouth : [ x: Integer, y: Integer ] ]
+               right_corner_mouth : [ x: Integer, y: Integer ],
+               left_corner_mouth  : [ x: Integer, y: Integer ] ]
 ~~~
 
 # Example
