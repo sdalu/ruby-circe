@@ -50,10 +50,15 @@ Thresholds are all within `0..1`, and any subset may be given:
 features, = circe.analyze(img, threshold: { score: 0.35 })
 ~~~
 
-Note that the class names come from the original COCO/VOC naming, so a few
-differ from the ones the ultralytics documentation uses: `motorbike` (not
-`motorcycle`), `aeroplane` (not `airplane`), `sofa` (not `couch`) and
-`tvmonitor` (not `tv`).
+Class names are the 80 modern COCO ones, exactly as carried in the model
+metadata. `Circe::CLASSES` holds them, so a filter list can be checked
+rather than guessed at:
+
+~~~ruby
+VEHICLE = %w[bicycle car motorcycle bus train truck boat].freeze
+ANIMAL  = %w[bird cat dog horse sheep cow].freeze
+raise "typo" unless (VEHICLE + ANIMAL).all? { Circe::CLASSES.include?(it) }
+~~~
 
 # Models
 

@@ -19,6 +19,29 @@ module CirceTest
             assert_includes classes.map { it[2] }, "person"
         end
 
+        # The names must be the modern COCO ones the models were trained
+        # with, not the older VOC spellings circe used to carry: a filter
+        # written against the model's own vocabulary has to match
+        def test_class_names_use_the_modern_coco_vocabulary
+            %w[motorcycle airplane couch tv].each do |name|
+                assert_includes Circe::CLASSES, name
+            end
+            %w[motorbike aeroplane sofa tvmonitor].each do |name|
+                refute_includes Circe::CLASSES, name
+            end
+        end
+
+        def test_the_vocabulary_is_the_full_coco_set
+            assert_equal 80, Circe::CLASSES.size
+            assert_equal "person", Circe::CLASSES.first
+            assert Circe::CLASSES.frozen?, "CLASSES should be frozen"
+        end
+
+        # Whatever is reported has to come from that vocabulary
+        def test_detected_names_belong_to_the_vocabulary
+            classes.each { assert_includes Circe::CLASSES, it[2] }
+        end
+
         def test_every_feature_is_a_quadruple
             features.each { assert_equal 4, it.size }
         end

@@ -663,6 +663,15 @@ void Init_core(void) {
     if (errmsg[0])
 	rb_raise(eCirceError, "failed to load model: %s", errmsg);
 
+    /* The classification vocabulary, so a caller can check a filter list
+     * against it instead of guessing at the spelling.
+     */
+    VALUE v_classes = rb_ary_new_capa(yolo->classes.size());
+    for (const std::string& name : yolo->classes)
+	rb_ary_push(v_classes,
+		    rb_obj_freeze(rb_str_new(name.c_str(), name.size())));
+    rb_define_const(cCirce, "CLASSES", rb_obj_freeze(v_classes));
+
 
     id_debug       = rb_intern_const("debug"    );
     id_face        = rb_intern_const("face"     );
