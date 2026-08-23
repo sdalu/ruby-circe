@@ -67,15 +67,28 @@ Any yolo ONNX export whose output is the raw `(1, 4 + classes, boxes)` or
 covers yolov5u, yolov8 and yolo11. It does *not* cover an end-to-end or
 `nms=True` export, whose `(1, 300, 6)` output is refused.
 
-Teaching the post-processing to read that shape would not be enough, and
-yolo26 is worth spelling out as the case in point: opencv 4.13 imports it
-and computes it wrongly. Given the same input tensor, byte for byte,
-onnxruntime returns the four people and the bus of the sample image, in
-descending confidence; opencv returns the first detection's confidence
-and class repeated across all three hundred rows, with mis-gathered
-boxes. The same comparison on yolo11 agrees to 2e-6 on average, so it is
-specific to the end-to-end head, not general. Supporting yolo26 means
-changing inference backend, not adding a decoder.
+Teaching the post-processing to read that shape would not be enough:
+opencv 4.13 imports an end-to-end model and computes it wrongly. Given
+the same input tensor, byte for byte, onnxruntime returns the four people
+and the bus of the sample image in descending confidence, while opencv
+returns the first detection's confidence and class repeated across all
+three hundred rows, with mis-gathered boxes. The same comparison on
+yolo11 agrees to 2e-6 on average, so it is the end-to-end head
+specifically. Reported upstream as ultralytics#23524, closed stale.
+
+yolo26 can still be used, by exporting the raw head instead:
+
+~~~sh
+yolo export model=yolo26n.pt format=onnx imgsz=480,640 end2end=False
+~~~
+
+That gives `(1, 84, 6300)`, which opencv computes correctly -- checked
+against onnxruntime, same 2e-6 -- and which needs no change here. It is
+not currently worth it though: measured against yolo11n it classifies
+about a quarter slower and finds fewer objects at any threshold. The
+speed yolo26 is advertised for comes from the NMS-free head doing the
+selection in-graph, which is exactly the part opencv gets wrong, and the
+raw head was never meant to be paired with classic NMS.
 
 The path and input size are set by `ONNX_YOLO` in `lib/circe.rb`, and the
 size must match what the model was exported with. A square size makes the
