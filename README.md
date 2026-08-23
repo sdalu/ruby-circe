@@ -98,6 +98,19 @@ rake bench N=20 IMAGE=frame.jpg
 rake bench MODEL=data/yolo11n.onnx SIZE=640x480
 ~~~
 
+`rake bench:compare` puts several of them side by side, one process
+each since the network is built when the extension is required. With no
+`MODELS` it compares whatever is in `data/`, so dropping a candidate
+there is enough. A model that will not run says why rather than
+disappearing from the table.
+
+~~~
+  model                    load    cold classify   face   both  rss features
+  yolo11n @640x480          519     210      148     12    179  220        6
+  yolov5su @640x480         817     421      270     14    301  382        6
+  yolo26s @640x640     yolo: cannot decode a model giving 6 values per ...
+~~~
+
 For reference, a raspberry pi 4 running the bundled model:
 
 ~~~

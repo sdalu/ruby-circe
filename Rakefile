@@ -46,4 +46,11 @@ task bench: :compile do
     ruby "benchmark/run.rb"
 end
 
+namespace :bench do
+    desc "Compare models side by side (MODELS=\"a.onnx@640x480 ...\")"
+    task compare: :compile do
+        ruby "benchmark/compare.rb"
+    end
+end
+
 task default: :test
