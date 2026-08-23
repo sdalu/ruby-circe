@@ -1,0 +1,21 @@
+*~
+*.gem
+*.rbc
+
+## Documentation cache and generated files:
+/.yardoc/
+/_yardoc/
+/doc/
+/rdoc/
+
+## Environment normalization:
+/vendor/bundle
+
+## Build products:
+*.o
+*.so
+/ext/Makefile
+/ext/mkmf.log
+
+## Fixtures fetched on demand by the test suite:
+/test/fixtures/
