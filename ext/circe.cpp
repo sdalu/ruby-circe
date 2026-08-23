@@ -128,6 +128,12 @@ static ID id_thickness;
 static ID id_extra;
 static ID id_color;
 
+static ID id_threshold;
+static ID id_confidence;
+static ID id_score;
+static ID id_nms;
+static ID id_face_nms;
+
 static Yolo  *yolo;
 static YuNet *yunet;
 
@@ -139,6 +145,53 @@ static YuNet *yunet;
  * buffer and turned into a ruby exception once every C++ frame is gone.
  */
 #define CIRCE_ERRSZ 512
+
+
+/* Read one threshold out of the :threshold hash, keeping the default when
+ * it wasn't given. Raises, so it must be called before any C++ object is
+ * alive: see the note in circe_m_analyze().
+ */
+static float
+threshold_get(VALUE v_hash, ID key, float dflt)
+{
+    if (NIL_P(v_hash))
+	return dflt;
+
+    VALUE v = rb_hash_lookup2(v_hash, rb_id2sym(key), Qundef);
+    if (v == Qundef)
+	return dflt;
+
+    double d = NUM2DBL(v);
+    if ((d < 0.0) || (d > 1.0))
+	rb_raise(rb_eArgError, "threshold %s must be within 0..1",
+		 rb_id2name(key));
+
+    return (float)d;
+}
+
+/* An unknown key is refused instead of ignored: silently dropping a
+ * misspelt threshold would leave the caller believing it had been applied.
+ */
+static void
+threshold_check(VALUE v_hash)
+{
+    static const ID *known[] = { &id_confidence, &id_score, &id_nms,
+				 &id_face,       &id_face_nms };
+    size_t n = sizeof(known) / sizeof(known[0]);
+    size_t found = 0;
+
+    if (NIL_P(v_hash))
+	return;
+
+    Check_Type(v_hash, T_HASH);
+    for (size_t i = 0; i < n; i++)
+	if (rb_hash_lookup2(v_hash, rb_id2sym(*known[i]), Qundef) != Qundef)
+	    found++;
+
+    if ((size_t)RHASH_SIZE(v_hash) != found)
+	rb_raise(rb_eArgError, "threshold keys are :confidence, :score, "
+		 ":nms, :face and :face_nms");
+}
 
 
 
@@ -437,16 +490,18 @@ static VALUE
 circe_m_analyze(int argc, VALUE* argv, VALUE self) {
     // Retrieve arguments
     VALUE v_imgstr, v_format, v_opts;
-    VALUE kwargs[3] = { Qundef, Qundef, Qundef };
+    VALUE kwargs[4] = { Qundef, Qundef, Qundef, Qundef };
     rb_scan_args(argc, argv, "11:", &v_imgstr, &v_format, &v_opts);
     // Note: rb_get_kwargs() leaves kwargs[] untouched on a nil hash
     if (! NIL_P(v_opts))
-	rb_get_kwargs(v_opts, (ID[]){ id_debug, id_face, id_classify },
-		      0, 3, kwargs);
+	rb_get_kwargs(v_opts,
+		      (ID[]){ id_debug, id_face, id_classify, id_threshold },
+		      0, 4, kwargs);
 
-    VALUE v_debug    = IF_UNDEF(kwargs[0], Qfalse);
-    VALUE v_face     = kwargs[1];
-    VALUE v_classify = kwargs[2];
+    VALUE v_debug     = IF_UNDEF(kwargs[0], Qfalse);
+    VALUE v_face      = kwargs[1];
+    VALUE v_classify  = kwargs[2];
+    VALUE v_threshold = IF_UNDEF(kwargs[3], Qnil);
 
     // Selecting is either positive (run only what was asked for) or by
     // exclusion (run everything but what was refused). Qundef means the
@@ -464,6 +519,21 @@ circe_m_analyze(int argc, VALUE* argv, VALUE self) {
 
     v_face     = face_on     ? Qtrue : Qfalse;
     v_classify = classify_on ? Qtrue : Qfalse;
+
+    // Thresholds are read here, while raising is still harmless
+    threshold_check(v_threshold);
+    Yolo::Threshold  ythreshold;
+    YuNet::Threshold fthreshold;
+    ythreshold.confidence = threshold_get(v_threshold, id_confidence,
+					  ythreshold.confidence);
+    ythreshold.score      = threshold_get(v_threshold, id_score,
+					  ythreshold.score);
+    ythreshold.nms        = threshold_get(v_threshold, id_nms,
+					  ythreshold.nms);
+    fthreshold.score      = threshold_get(v_threshold, id_face,
+					  fthreshold.score);
+    fthreshold.nms        = threshold_get(v_threshold, id_face_nms,
+					  fthreshold.nms);
 
     // Image is taken as a raw byte string, ensure that's what we got
     StringValue(v_imgstr);
@@ -501,14 +571,14 @@ circe_m_analyze(int argc, VALUE* argv, VALUE self) {
 
 	    if (RTEST(v_classify)) {
 		vector<Yolo::Item> items;
-		yolo->process(i_img, items);
+		yolo->process(i_img, items, ythreshold);
 		yolo_process_features(items, o_img, v_features,
 				      &state, errmsg);
 	    }
 
 	    if (!state && !errmsg[0] && RTEST(v_face)) {
 		cv::Mat faces;
-		yunet->process(i_img, faces);
+		yunet->process(i_img, faces, fthreshold);
 		yunet_process_features(faces, i_img.size(), o_img,
 				       v_features, &state, errmsg);
 	    }
@@ -604,6 +674,11 @@ void Init_core(void) {
     id_thickness   = rb_intern_const("thickness");
     id_extra       = rb_intern_const("extra"    );
     id_color       = rb_intern_const("color"    );
+    id_threshold   = rb_intern_const("threshold" );
+    id_confidence  = rb_intern_const("confidence");
+    id_score       = rb_intern_const("score"     );
+    id_nms         = rb_intern_const("nms"       );
+    id_face_nms    = rb_intern_const("face_nms"  );
     
     
     rb_define_method(cCirce, "analyze", circe_m_analyze, -1);

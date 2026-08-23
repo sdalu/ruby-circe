@@ -12,16 +12,30 @@ class Yolo
 {
 public:
     typedef std::tuple<std::string, float, cv::Rect> Item;
-    
+
+    /* Detection thresholds, all within 0..1.
+     *  confidence : objectness, only present in the v5 layout
+     *  score      : lowest class score kept
+     *  nms        : IoU above which two boxes are taken for one object
+     */
+    struct Threshold {
+	float confidence;
+	float score;
+	float nms;
+
+	/* A constructor rather than default member initializers: those
+	 * cannot be used for a default argument inside this same class.
+	 */
+	Threshold(float c = 0.25f, float s = 0.50f, float n = 0.50f)
+	    : confidence(c), score(s), nms(n) {}
+    };
+
 private:
     static constexpr float INPUT_WIDTH          = 640.0;
     static constexpr float INPUT_HEIGHT         = 640.0;
-    static constexpr float CONFIDENCE_THRESHOLD =   0.25;
-    static constexpr float SCORE_THRESHOLD      =   0.50;
-    static constexpr float NMS_THRESHOLD        =   0.50;
 
     bool letterBoxForSquare = true;
-    
+
  public:
     const std::vector<std::string> classes = {
 	"person", "bicycle", "car", "motorbike", "aeroplane", "bus", "train",
@@ -41,7 +55,8 @@ private:
 
 public:
     Yolo(const std::string& model, cv::Size size);
-    void process(cv::Mat &img, std::vector<Item> &items);
+    void process(cv::Mat &img, std::vector<Item> &items,
+		 const Threshold& threshold = Threshold());
     
 private:
     cv::dnn::Net net;
