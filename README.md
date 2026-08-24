@@ -147,6 +147,12 @@ At 1080p faces cost more than everything else together. So by default
 the image is shrunk to 640 on its longest side for the face pass only,
 and the coordinates are scaled back; below that nothing happens.
 
+Shrinking is not free, and the figures above include it: on the same pi,
+a 1920 px frame costs 5 ms to resize and saves 714 ms of detection. It
+is done with `INTER_AREA`, which is the slower filter but the right one
+for a 3x reduction — `INTER_LINEAR` would save 2 ms and alias away the
+detail the smallest faces are made of.
+
 The cost is the smallest faces. On a 1920x1080 frame, capping at 640
 keeps faces down to about 30 px wide and loses them below that. Raise
 it, or switch it off, if you need faces further away:
