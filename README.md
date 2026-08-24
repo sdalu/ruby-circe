@@ -99,6 +99,7 @@ subject's right, so on a frontal face it sits at the smaller x.
 | `classify:` | | run object classification |
 | `debug:` | `false` | overlay the inference time |
 | `threshold:` | | detection thresholds, see below |
+| `face_input:` | `640` | longest side the face detector sees |
 
 Selection is a property of the pair, not of either one. Given neither,
 both run. Given either, each is taken literally — `true` selects and
@@ -127,6 +128,33 @@ unknown key raises rather than being ignored.
 block. `:confidence` is a different thing — objectness — and does
 nothing with the bundled model, which has no such term; it is there for
 a yolov5-layout model.
+
+## face_input
+
+Classification always resizes to the model's input, so its cost is the
+same whatever you feed it. Face detection does not: it runs at the size
+of the image it is given, and so gets steadily more expensive as the
+source grows. Measured on a raspberry pi 4, the same scene:
+
+| source width | face | classify |
+|---|---|---|
+| 320 | 23 ms | 654 ms |
+| 800 | 127 ms | 519 ms |
+| 1280 | 360 ms | 557 ms |
+| 1920 | **933 ms** | 691 ms |
+
+At 1080p faces cost more than everything else together. So by default
+the image is shrunk to 640 on its longest side for the face pass only,
+and the coordinates are scaled back; below that nothing happens.
+
+The cost is the smallest faces. On a 1920x1080 frame, capping at 640
+keeps faces down to about 30 px wide and loses them below that. Raise
+it, or switch it off, if you need faces further away:
+
+~~~ruby
+circe.analyze(img, face_input: 1280)  # shrink less, keep smaller faces
+circe.analyze(img, face_input: nil)   # full image, as before
+~~~
 
 ~~~ruby
 # Catch people further away, at the cost of more false positives

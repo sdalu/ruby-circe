@@ -133,6 +133,14 @@ static ID id_confidence;
 static ID id_score;
 static ID id_nms;
 static ID id_face_nms;
+static ID id_face_input;
+
+/* Longest side the face detector is given, beyond which the image is
+ * shrunk for it. See the note in yunet.h: its cost follows the source
+ * resolution, so a large frame otherwise spends more on faces than on
+ * everything else together.
+ */
+#define CIRCE_FACE_INPUT 640
 
 static Yolo  *yolo;
 static YuNet *yunet;
@@ -490,18 +498,28 @@ static VALUE
 circe_m_analyze(int argc, VALUE* argv, VALUE self) {
     // Retrieve arguments
     VALUE v_imgstr, v_format, v_opts;
-    VALUE kwargs[4] = { Qundef, Qundef, Qundef, Qundef };
+    VALUE kwargs[5] = { Qundef, Qundef, Qundef, Qundef, Qundef };
     rb_scan_args(argc, argv, "11:", &v_imgstr, &v_format, &v_opts);
     // Note: rb_get_kwargs() leaves kwargs[] untouched on a nil hash
     if (! NIL_P(v_opts))
 	rb_get_kwargs(v_opts,
-		      (ID[]){ id_debug, id_face, id_classify, id_threshold },
-		      0, 4, kwargs);
+		      (ID[]){ id_debug, id_face, id_classify, id_threshold,
+			      id_face_input },
+		      0, 5, kwargs);
 
-    VALUE v_debug     = IF_UNDEF(kwargs[0], Qfalse);
-    VALUE v_face      = kwargs[1];
-    VALUE v_classify  = kwargs[2];
-    VALUE v_threshold = IF_UNDEF(kwargs[3], Qnil);
+    VALUE v_debug      = IF_UNDEF(kwargs[0], Qfalse);
+    VALUE v_face       = kwargs[1];
+    VALUE v_classify   = kwargs[2];
+    VALUE v_threshold  = IF_UNDEF(kwargs[3], Qnil);
+    VALUE v_face_input = kwargs[4];
+
+    // nil asks for the full image, absent takes the default
+    int face_input = CIRCE_FACE_INPUT;
+    if (v_face_input != Qundef) {
+	face_input = NIL_P(v_face_input) ? 0 : NUM2INT(v_face_input);
+	if (face_input < 0)
+	    rb_raise(rb_eArgError, "face_input must be positive, or nil");
+    }
 
     // Selecting is either positive (run only what was asked for) or by
     // exclusion (run everything but what was refused). Qundef means the
@@ -578,7 +596,7 @@ circe_m_analyze(int argc, VALUE* argv, VALUE self) {
 
 	    if (!state && !errmsg[0] && RTEST(v_face)) {
 		cv::Mat faces;
-		yunet->process(i_img, faces, fthreshold);
+		yunet->process(i_img, faces, fthreshold, face_input);
 		yunet_process_features(faces, i_img.size(), o_img,
 				       v_features, &state, errmsg);
 	    }
@@ -688,6 +706,7 @@ void Init_core(void) {
     id_score       = rb_intern_const("score"     );
     id_nms         = rb_intern_const("nms"       );
     id_face_nms    = rb_intern_const("face_nms"  );
+    id_face_input  = rb_intern_const("face_input");
     
     
     rb_define_method(cCirce, "analyze", circe_m_analyze, -1);
