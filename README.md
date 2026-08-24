@@ -99,7 +99,7 @@ subject's right, so on a frontal face it sits at the smaller x.
 | `classify:` | | run object classification |
 | `debug:` | `false` | overlay the inference time |
 | `threshold:` | | detection thresholds, see below |
-| `face_input:` | `640` | longest side the face detector sees |
+| `face_input:` | `800` | longest side the face detector sees |
 
 Selection is a property of the pair, not of either one. Given neither,
 both run. Given either, each is taken literally — `true` selects and
@@ -144,18 +144,27 @@ source grows. Measured on a raspberry pi 4, the same scene:
 | 1920 | **933 ms** | 691 ms |
 
 At 1080p faces cost more than everything else together. So by default
-the image is shrunk to 640 on its longest side for the face pass only,
+the image is shrunk to 800 on its longest side for the face pass only,
 and the coordinates are scaled back; below that nothing happens.
 
 Shrinking is not free, and the figures above include it: on the same pi,
-a 1920 px frame costs 5 ms to resize and saves 714 ms of detection. It
+a 1920 px frame costs 5 ms to resize and saves hundreds of detection. It
 is done with `INTER_AREA`, which is the slower filter but the right one
-for a 3x reduction — `INTER_LINEAR` would save 2 ms and alias away the
-detail the smallest faces are made of.
+for a large reduction — `INTER_LINEAR` would save 2 ms and alias away
+the detail the smallest faces are made of.
 
-The cost is the smallest faces. On a 1920x1080 frame, capping at 640
-keeps faces down to about 30 px wide and loses them below that. Raise
-it, or switch it off, if you need faces further away:
+What it costs is the smallest faces. Measured on a 1920x1080 frame, for
+the same pi and the same scene:
+
+| `face_input:` | pi 4 | smallest face kept |
+|---|---|---|
+| `nil` | 845 ms | below 14 px, plus false positives |
+| `1280` | 355 ms | ~14 px |
+| `800` (default) | 149 ms | ~20 px |
+| `640` | 119 ms | ~30 px |
+
+Shrinking also suppresses the weak false positives the detector finds at
+full resolution, so the smaller sizes are not purely a loss.
 
 ~~~ruby
 circe.analyze(img, face_input: 1280)  # shrink less, keep smaller faces

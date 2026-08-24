@@ -139,8 +139,12 @@ static ID id_face_input;
  * shrunk for it. See the note in yunet.h: its cost follows the source
  * resolution, so a large frame otherwise spends more on faces than on
  * everything else together.
+ *
+ * 800 rather than 640: on a 1920 px frame it costs 30 ms more on a
+ * raspberry pi 4, 149 against 119, and keeps faces down to about 20 px
+ * wide where 640 loses them at 30.
  */
-#define CIRCE_FACE_INPUT 640
+#define CIRCE_FACE_INPUT 800
 
 static Yolo  *yolo;
 static YuNet *yunet;
