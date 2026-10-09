@@ -19,3 +19,10 @@
 
 ## Fixtures fetched on demand by the test suite:
 /test/fixtures/
+/build/
+/a.out
+/mkmf.log
+/*.onnx
+/data/yolov5su.onnx
+/data/yolov5su-sim.onnx
+/data/yolov8s-sim.onnx
